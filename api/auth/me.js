@@ -12,6 +12,7 @@ const PUBLIC_FIELDS = [
   'avatar',
   'plan',
   'settings',
+  'location',
   'created_at',
 ].join(', ')
 
