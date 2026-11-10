@@ -1,0 +1,85 @@
+import { supabase } from '../_lib/supabase.js'
+import { applyCors } from '../_cors.js'
+
+// ---------------------------------------------------------------------------
+// Input validation
+// ---------------------------------------------------------------------------
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+
+function validateBody(body) {
+  const { name, email, password } = body ?? {}
+
+  if (!name || typeof name !== 'string' || name.trim().length < 2) {
+    return 'O nome deve ter pelo menos 2 caracteres.'
+  }
+  if (!email || typeof email !== 'string' || !EMAIL_RE.test(email.trim())) {
+    return 'Endereço de e-mail inválido.'
+  }
+  if (!password || typeof password !== 'string' || password.length < 8) {
+    return 'A senha deve ter pelo menos 8 caracteres.'
+  }
+  return null
+}
+
+// ---------------------------------------------------------------------------
+// Security headers
+// ---------------------------------------------------------------------------
+function applySecurityHeaders(res) {
+  res.setHeader('X-Content-Type-Options', 'nosniff')
+  res.setHeader('X-Frame-Options', 'DENY')
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin')
+}
+
+// ---------------------------------------------------------------------------
+// Handler
+// ---------------------------------------------------------------------------
+export default async function handler(req, res) {
+  if (applyCors(req, res)) return
+
+  applySecurityHeaders(res)
+
+  if (req.method !== 'POST') return res.status(405).end()
+
+  // ── Input validation ──────────────────────────────────────────────────────
+  const validationError = validateBody(req.body)
+  if (validationError) {
+    return res.status(400).json({ error: validationError })
+  }
+
+  const name = req.body.name.trim()
+  const email = req.body.email.trim().toLowerCase()
+  const { password } = req.body
+
+  // ── Check existing account ────────────────────────────────────────────────
+  const { data: existing } = await supabase
+    .from('users')
+    .select('id')
+    .eq('email', email)
+    .maybeSingle()
+
+  if (existing) {
+    return res.status(409).json({ error: 'Já existe uma conta com este e-mail.' })
+  }
+
+  // ── Register ──────────────────────────────────────────────────────────────
+  const { data, error } = await supabase.auth.signUp({ email, password })
+
+  if (error) {
+    return res.status(400).json({ error: error.message })
+  }
+
+  // ── Create user record ────────────────────────────────────────────────────
+  const { error: insertError } = await supabase.from('users').insert({
+    id: data.user.id,
+    email,
+    name,
+  })
+
+  if (insertError) {
+    // Auth user created but profile failed — clean up to avoid orphaned auth records
+    await supabase.auth.admin.deleteUser(data.user.id)
+    return res.status(500).json({ error: 'Falha ao criar a conta. Por favor, tente novamente.' })
+  }
+
+  return res.status(201).json({ success: true })
+}
